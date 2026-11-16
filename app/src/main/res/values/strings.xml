@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Frame Launcher</string>
+    <string name="admin_desc">Lets the frame launcher turn the screen off on schedule.</string>
+</resources>
