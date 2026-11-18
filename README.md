@@ -36,8 +36,9 @@ app.
   clock or timezone change, it works out which mode should be active right now.
 - **Show now.** You can manually pick a mode from settings. It stays until the
   next scheduled switch, or until you tap "Resume schedule".
-- **Swipes** in photo and animation modes: left/right for next/previous, up for a
-  fresh batch of photos, down to restart the mode.
+- **Swipes** in photo, clock and animation modes: left/right for next/previous,
+  up for the next screensaver (NAS photos, Picsum, split-flap clock, wireframe;
+  until the next scheduled switch), down to restart the mode.
 - **Hidden settings.** There's no visible UI. Hold your finger on the top-left
   corner for 2.5 seconds to open settings. You can protect this with a numeric
   PIN.

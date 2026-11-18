@@ -55,6 +55,7 @@ class MainActivity : Activity() {
     private lateinit var showHost: FrameLayout
     private lateinit var black: View
     private lateinit var banner: TextView
+    private lateinit var hud: TextView
 
     private var shownPresetId: String? = null
     private var shownUrl: String? = null
@@ -64,6 +65,8 @@ class MainActivity : Activity() {
     private var advanceMs = 0L
     private var previewPreset: Preset? = null
     private var previewUntil = 0L
+    private var shownBrightness = 200
+    private var shownIntervalSec = 30
     private var peeking = false
     private var resumed = false
 
@@ -185,6 +188,16 @@ class MainActivity : Activity() {
         root.addView(showHost, FrameLayout.LayoutParams(match, match))
         root.addView(black, FrameLayout.LayoutParams(match, match))
         root.addView(banner, FrameLayout.LayoutParams(match, match))
+        hud = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 22f
+            setPadding(40, 14, 40, 14)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0x8C000000.toInt()); cornerRadius = 999f
+            }
+            alpha = 0f
+        }
+        root.addView(hud, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = 32 })
         setContentView(root)
     }
 
@@ -238,6 +251,7 @@ class MainActivity : Activity() {
         }
         Log.i(TAG, "showing ${p.name} (${p.type})")
         shownPresetId = p.id; shownType = p.type
+        shownBrightness = p.brightness; shownIntervalSec = p.intervalSec
         ui.removeCallbacks(reloadRunnable)
 
         if (p.type != ModeType.WEB) web.onPause()
@@ -400,16 +414,45 @@ class MainActivity : Activity() {
         return super.dispatchTouchEvent(ev)
     }
 
-    /** Left/right: next/previous photo or scene. Up: something different. Down: restart the show. */
+    /** Left/right: next/previous photo or scene. Up: next screensaver. Down: restart the show. */
     private fun onSwipe(dx: Float, dy: Float) {
         val show = currentShow ?: return
         if (maxOf(Math.abs(dx), Math.abs(dy)) < 50 * resources.displayMetrics.density) return
         when {
             Math.abs(dx) > Math.abs(dy) -> if (dx < 0) show.next() else show.prev()
-            dy < 0 -> show.skip()
+            dy < 0 -> { nextScreensaver(); return }
             else -> apply(force = true)
         }
         restartAdvance()
+    }
+
+    /**
+     * Swipe up: switch to the next native screensaver until the next scheduled switch.
+     * Uses the settings of a configured mode of that type when there is one.
+     */
+    private fun nextScreensaver() {
+        val cfg = Store.load(this)
+        val order = listOf(ModeType.PHOTOS, ModeType.PICSUM, ModeType.FLIP_CLOCK, ModeType.WIRE)
+        val from = order.indexOf(shownType)
+        for (k in 1..order.size) {
+            val t = order[(from + k) % order.size]
+            val configured = cfg.presets.firstOrNull { it.type == t && (t != ModeType.PHOTOS || it.url.isNotBlank()) }
+            if (t == ModeType.PHOTOS && configured == null) continue   // no photo service to ask
+            val p = configured ?: Preset(name = t.label, type = t, brightness = shownBrightness, intervalSec = shownIntervalSec)
+            previewPreset = p
+            previewUntil = Schedule.state(cfg).nextAt ?: Long.MAX_VALUE
+            Log.i(TAG, "swipe up: ${p.name} (${p.type}) until next switch")
+            apply(force = true)
+            flashHud(p.name)
+            return
+        }
+    }
+
+    private fun flashHud(text: String) {
+        hud.text = text
+        hud.animate().cancel()
+        hud.alpha = 1f
+        hud.animate().alpha(0f).setStartDelay(1800).setDuration(400).start()
     }
 
     private fun cancelHold() {
