@@ -65,6 +65,8 @@ class MainActivity : Activity() {
     private var advanceMs = 0L
     private var previewPreset: Preset? = null
     private var previewUntil = 0L
+    /** Settings revision when the preview started; any later save in settings ends it. */
+    private var previewRev = 0L
     private var shownBrightness = 200
     private var shownIntervalSec = 30
     private var peeking = false
@@ -232,7 +234,9 @@ class MainActivity : Activity() {
         if (peeking && !force) return
         val cfg = Store.load(this)
         Net.allowInsecureSsl = cfg.allowInsecureSsl
-        if (previewPreset != null && System.currentTimeMillis() >= previewUntil) previewPreset = null
+        if (previewPreset != null &&
+            (System.currentTimeMillis() >= previewUntil || Store.revision(this) != previewRev)
+        ) previewPreset = null
         val p = previewPreset ?: Schedule.state(cfg).active
         if (p == null) {
             stopShow()
@@ -349,6 +353,7 @@ class MainActivity : Activity() {
                 intervalSec = i.getIntExtra("interval", 30).coerceAtLeast(5), brightness = 200)
         }
         previewUntil = System.currentTimeMillis() + PREVIEW_MS
+        previewRev = Store.revision(this)
         Log.i(TAG, "preview: ${previewPreset?.type ?: "off"}")
         if (::showHost.isInitialized) apply(force = true)
     }
@@ -441,6 +446,7 @@ class MainActivity : Activity() {
             val p = configured ?: Preset(name = t.label, type = t, brightness = shownBrightness, intervalSec = shownIntervalSec)
             previewPreset = p
             previewUntil = Schedule.state(cfg).nextAt ?: Long.MAX_VALUE
+            previewRev = Store.revision(this)
             Log.i(TAG, "swipe up: ${p.name} (${p.type}) until next switch")
             apply(force = true)
             flashHud(p.name)

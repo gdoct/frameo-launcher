@@ -142,6 +142,7 @@ fun newId(): String = UUID.randomUUID().toString().substring(0, 8)
 object Store {
     private const val PREFS = "frame"
     private const val KEY = "config"
+    private const val REV = "rev"
 
     fun load(ctx: Context): Config {
         val raw = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null)
@@ -150,9 +151,16 @@ object Store {
     }
 
     fun save(ctx: Context, cfg: Config) {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY, cfg.toJson().toString()).commit()
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(KEY, cfg.toJson().toString())
+            .putLong(REV, prefs.getLong(REV, 0) + 1)
+            .commit()
     }
+
+    /** Goes up on every save, so callers can tell the settings changed. */
+    fun revision(ctx: Context): Long =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(REV, 0)
 }
 
 /** Result of evaluating the schedule at a moment in time. */
