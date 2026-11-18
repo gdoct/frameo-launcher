@@ -8,24 +8,41 @@ import java.util.UUID
 
 enum class ModeType(val label: String) {
     WEB("Web page"),
-    CLOCK("Clock"),
+    PHOTOS("NAS photos"),
+    PICSUM("Picsum photos"),
+    FLIP_CLOCK("Split-flap clock"),
+    WIRE("Wireframe animations"),
+    CLOCK("Simple clock"),
     OFF("Screen off");
+
+    /** Shows that advance on a timer (and on left/right swipes). */
+    val timed get() = this == PHOTOS || this == PICSUM || this == WIRE
 }
 
-/** A named way the frame can look: a web page, a clock, or a dark screen. */
+/** A named way the frame can look: a web page, a native show, a clock, or a dark screen. */
 class Preset(
     val id: String = newId(),
     var name: String,
     var type: ModeType,
+    /** WEB: the page. PHOTOS: the photo service, e.g. http://nas:8088. */
     var url: String = "",
     /** 1..255; ignored for OFF. */
     var brightness: Int = 180,
     /** Reload the page every N minutes (0 = never). WEB only. */
     var reloadMinutes: Int = 0,
+    /** Seconds per photo or animation scene. Timed types only. */
+    var intervalSec: Int = 30,
+    /** Weather location. FLIP_CLOCK only. Default De Bilt. */
+    var lat: Double = 52.10,
+    var lon: Double = 5.18,
 ) {
     fun toJson() = JSONObject()
         .put("id", id).put("name", name).put("type", type.name)
         .put("url", url).put("brightness", brightness).put("reloadMinutes", reloadMinutes)
+        .put("intervalSec", intervalSec).put("lat", lat).put("lon", lon)
+
+    /** Changes when anything that needs the show rebuilt changes (brightness excluded). */
+    fun showKey() = "$type|$url|$intervalSec|$lat|$lon"
 
     companion object {
         fun fromJson(o: JSONObject) = Preset(
@@ -35,6 +52,9 @@ class Preset(
             url = o.optString("url", ""),
             brightness = o.optInt("brightness", 180),
             reloadMinutes = o.optInt("reloadMinutes", 0),
+            intervalSec = o.optInt("intervalSec", 30).coerceAtLeast(5),
+            lat = o.optDouble("lat", 52.10),
+            lon = o.optDouble("lon", 5.18),
         )
     }
 }
@@ -99,7 +119,7 @@ class Config(
         }
 
         fun defaults(): Config {
-            val photos = Preset(name = "Photos", type = ModeType.WEB, url = "", brightness = 200)
+            val photos = Preset(name = "Photos", type = ModeType.PHOTOS, url = "", brightness = 200)
             val dashboard = Preset(name = "Dashboard", type = ModeType.WEB, url = "", brightness = 200)
             val night = Preset(name = "Night clock", type = ModeType.CLOCK, brightness = 8)
             val off = Preset(name = "Screen off", type = ModeType.OFF, brightness = 0)

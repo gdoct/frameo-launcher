@@ -35,6 +35,13 @@ import java.util.Locale
 class MainActivity : Activity() {
     companion object {
         const val EXTRA_FROM_ENGINE = "fromEngine"
+        /**
+         * Testing aid: `adb shell am start -n app.framelauncher/.MainActivity --es preview WIRE`
+         * shows that mode type for 10 minutes (optional --es url ..., --ei interval ...).
+         * `--es preview none` ends it (any name that is not a mode type).
+         */
+        const val EXTRA_PREVIEW = "preview"
+        private const val PREVIEW_MS = 10 * 60_000L
         private const val PEEK_MS = 60_000L
         private const val CHECK_MS = 30_000L
         private const val HOT_CORNER_PX = 140
@@ -45,12 +52,18 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var web: WebView
     private lateinit var clock: ClockView
+    private lateinit var showHost: FrameLayout
     private lateinit var black: View
     private lateinit var banner: TextView
 
     private var shownPresetId: String? = null
     private var shownUrl: String? = null
     private var shownType: ModeType? = null
+    private var shownKey: String? = null
+    private var currentShow: Show? = null
+    private var advanceMs = 0L
+    private var previewPreset: Preset? = null
+    private var previewUntil = 0L
     private var peeking = false
     private var resumed = false
 
@@ -72,6 +85,7 @@ class MainActivity : Activity() {
                 WindowManager.LayoutParams.FLAG_FULLSCREEN
         )
         buildUi()
+        handlePreview(intent)
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
         // Make sure an alarm is armed even if we were started by hand.
         Engine.sync(this, bringToFront = false)
@@ -80,6 +94,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handlePreview(intent)
         apply(force = false)
     }
 
@@ -89,6 +104,7 @@ class MainActivity : Activity() {
         hideSystemUi()
         web.onResume()
         apply(force = false)
+        restartAdvance()
         ui.removeCallbacks(periodicCheck)
         ui.postDelayed(periodicCheck, CHECK_MS)
     }
@@ -96,6 +112,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         resumed = false
         ui.removeCallbacks(periodicCheck)
+        ui.removeCallbacks(advance)
         if (shownType != ModeType.WEB) web.onPause()
         super.onPause()
     }
@@ -103,6 +120,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         runCatching { unregisterReceiver(screenReceiver) }
         ui.removeCallbacksAndMessages(null)
+        stopShow()
         web.destroy()
         super.onDestroy()
     }
@@ -145,8 +163,14 @@ class MainActivity : Activity() {
             webViewClient = FrameWebClient()
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
+            // No long-press text selection: it cancels the touch stream, which breaks the
+            // hidden settings hold in the top-left corner.
+            setOnLongClickListener { true }
+            isLongClickable = false
+            isHapticFeedbackEnabled = false
         }
         clock = ClockView(this)
+        showHost = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         black = View(this).apply { setBackgroundColor(Color.BLACK) }
         banner = TextView(this).apply {
             setTextColor(0xFFB0BEC5.toInt())
@@ -158,6 +182,7 @@ class MainActivity : Activity() {
         val match = FrameLayout.LayoutParams.MATCH_PARENT
         root.addView(web, FrameLayout.LayoutParams(match, match))
         root.addView(clock, FrameLayout.LayoutParams(match, match))
+        root.addView(showHost, FrameLayout.LayoutParams(match, match))
         root.addView(black, FrameLayout.LayoutParams(match, match))
         root.addView(banner, FrameLayout.LayoutParams(match, match))
         setContentView(root)
@@ -185,7 +210,7 @@ class MainActivity : Activity() {
     }
 
     private fun showOnly(v: View?) {
-        for (x in listOf(web, clock, black, banner)) x.visibility = if (x === v) View.VISIBLE else View.GONE
+        for (x in listOf(web, clock, showHost, black, banner)) x.visibility = if (x === v) View.VISIBLE else View.GONE
     }
 
     // ---------- mode switching ----------
@@ -193,9 +218,11 @@ class MainActivity : Activity() {
     private fun apply(force: Boolean) {
         if (peeking && !force) return
         val cfg = Store.load(this)
-        val st = Schedule.state(cfg)
-        val p = st.active
+        Net.allowInsecureSsl = cfg.allowInsecureSsl
+        if (previewPreset != null && System.currentTimeMillis() >= previewUntil) previewPreset = null
+        val p = previewPreset ?: Schedule.state(cfg).active
         if (p == null) {
+            stopShow()
             showOnly(banner)
             banner.text = "No modes configured.\n\nHold the top-left corner to open settings."
             keepScreenOn(true); setBrightness(150)
@@ -203,7 +230,8 @@ class MainActivity : Activity() {
             return
         }
         val changed = force || p.id != shownPresetId || p.type != shownType ||
-            (p.type == ModeType.WEB && p.url != shownUrl)
+            (p.type == ModeType.WEB && p.url != shownUrl) ||
+            (currentShow != null && p.showKey() != shownKey)
         if (!changed) {
             setBrightness(p.brightness) // brightness edits apply without a reload
             return
@@ -212,8 +240,21 @@ class MainActivity : Activity() {
         shownPresetId = p.id; shownType = p.type
         ui.removeCallbacks(reloadRunnable)
 
+        if (p.type != ModeType.WEB) web.onPause()
         when (p.type) {
+            ModeType.PHOTOS, ModeType.PICSUM, ModeType.FLIP_CLOCK, ModeType.WIRE -> {
+                if (p.type == ModeType.PHOTOS && p.url.isBlank()) {
+                    stopShow()
+                    showOnly(banner)
+                    banner.text = "\"${p.name}\" has no photo service URL yet.\n\nHold the top-left corner to open settings."
+                } else {
+                    startShow(p)
+                }
+                keepScreenOn(true); setBrightness(p.brightness)
+                Engine.wakeScreen(this)
+            }
             ModeType.WEB -> {
+                stopShow()
                 if (p.url.isBlank()) {
                     showOnly(banner)
                     banner.text = "\"${p.name}\" has no URL yet.\n\nHold the top-left corner to open settings."
@@ -229,19 +270,73 @@ class MainActivity : Activity() {
                 Engine.wakeScreen(this)
             }
             ModeType.CLOCK -> {
+                stopShow()
                 showOnly(clock)
-                web.onPause()
                 keepScreenOn(true); setBrightness(p.brightness)
                 Engine.wakeScreen(this)
             }
             ModeType.OFF -> {
+                stopShow()
                 showOnly(black)
-                web.onPause()
                 keepScreenOn(false); setBrightness(1)
                 // Let the black frame draw, then cut the display.
                 ui.postDelayed({ goDark() }, 1500)
             }
         }
+    }
+
+    // ---------- native shows ----------
+
+    private fun startShow(p: Preset) {
+        stopShow()
+        val interval = p.intervalSec * 1000L
+        val show: Show = when (p.type) {
+            ModeType.PHOTOS -> PhotoShowView(this, NasSource(p.url), interval)
+            ModeType.PICSUM -> PhotoShowView(this, PicsumSource(), interval)
+            ModeType.FLIP_CLOCK -> FlipClockView(this, p.lat, p.lon)
+            else -> WireView(this)
+        }
+        val match = FrameLayout.LayoutParams.MATCH_PARENT
+        showHost.addView(show.view, FrameLayout.LayoutParams(match, match))
+        currentShow = show
+        shownKey = p.showKey()
+        advanceMs = if (p.type.timed) interval else 0
+        showOnly(showHost)
+        restartAdvance()
+    }
+
+    private fun stopShow() {
+        ui.removeCallbacks(advance)
+        currentShow?.stop()
+        currentShow = null
+        shownKey = null
+        advanceMs = 0
+        showHost.removeAllViews()
+    }
+
+    private val advance = object : Runnable {
+        override fun run() {
+            currentShow?.next()
+            ui.postDelayed(this, advanceMs)
+        }
+    }
+
+    private fun restartAdvance() {
+        ui.removeCallbacks(advance)
+        if (advanceMs > 0 && resumed && currentShow != null) ui.postDelayed(advance, advanceMs)
+    }
+
+    private fun handlePreview(i: Intent?) {
+        val type = i?.getStringExtra(EXTRA_PREVIEW) ?: return
+        i.removeExtra(EXTRA_PREVIEW)
+        val t = runCatching { ModeType.valueOf(type.uppercase(Locale.ROOT)) }.getOrNull()
+        previewPreset = t?.let {
+            Preset(name = "Preview", type = it, url = i.getStringExtra("url") ?: "",
+                intervalSec = i.getIntExtra("interval", 30).coerceAtLeast(5), brightness = 200)
+        }
+        previewUntil = System.currentTimeMillis() + PREVIEW_MS
+        Log.i(TAG, "preview: ${previewPreset?.type ?: "off"}")
+        if (::showHost.isInitialized) apply(force = true)
     }
 
     private fun goDark() {
@@ -276,12 +371,18 @@ class MainActivity : Activity() {
     // ---------- hidden settings gesture ----------
 
     private var holdStart: Runnable? = null
+    private var swipeX = 0f
+    private var swipeY = 0f
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (peeking && ev.action == MotionEvent.ACTION_DOWN) {
             // Touch during a peek extends it.
             ui.removeCallbacks(endPeek)
             ui.postDelayed(endPeek, PEEK_MS)
+        }
+        if (currentShow != null && !peeking) when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { swipeX = ev.x; swipeY = ev.y }
+            MotionEvent.ACTION_UP -> onSwipe(ev.x - swipeX, ev.y - swipeY)
         }
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -297,6 +398,18 @@ class MainActivity : Activity() {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> cancelHold()
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    /** Left/right: next/previous photo or scene. Up: something different. Down: restart the show. */
+    private fun onSwipe(dx: Float, dy: Float) {
+        val show = currentShow ?: return
+        if (maxOf(Math.abs(dx), Math.abs(dy)) < 50 * resources.displayMetrics.density) return
+        when {
+            Math.abs(dx) > Math.abs(dy) -> if (dx < 0) show.next() else show.prev()
+            dy < 0 -> show.skip()
+            else -> apply(force = true)
+        }
+        restartAdvance()
     }
 
     private fun cancelHold() {

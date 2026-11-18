@@ -104,9 +104,10 @@ class SettingsActivity : Activity() {
         for (p in cfg.presets) {
             val desc = when (p.type) {
                 ModeType.WEB -> if (p.url.isBlank()) "Web page — no URL set" else p.url
-                ModeType.CLOCK -> "Clock"
-                ModeType.OFF -> "Screen off"
-            }
+                ModeType.PHOTOS -> if (p.url.isBlank()) "NAS photos — no service URL set" else "NAS photos from ${p.url}"
+                ModeType.FLIP_CLOCK -> "Split-flap clock, weather at ${p.lat}, ${p.lon}"
+                else -> p.type.label
+            } + if (p.type.timed) "  ·  ${p.intervalSec}s each" else ""
             val bright = if (p.type == ModeType.OFF) "" else "  ·  brightness ${p.brightness * 100 / 255}%"
             listItem(text("${p.name}\n$desc$bright", 18f), null) { editPreset(p) }
         }
@@ -202,7 +203,7 @@ class SettingsActivity : Activity() {
         box.addView(labelled("Type", type))
 
         val url = EditText(this).apply {
-            setText(p.url); setSingleLine(); hint = "http://nas.local:8080/slideshow"
+            setText(p.url); setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
         val urlRow = labelled("URL", url)
@@ -214,6 +215,20 @@ class SettingsActivity : Activity() {
         }
         val reloadRow = labelled("Reload every (min)", reload)
         box.addView(reloadRow)
+
+        val interval = EditText(this).apply {
+            setText(p.intervalSec.toString()); inputType = InputType.TYPE_CLASS_NUMBER; setSingleLine()
+        }
+        val intervalRow = labelled("Seconds per photo", interval)
+        box.addView(intervalRow)
+
+        val decimal = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+        val lat = EditText(this).apply { setText(p.lat.toString()); inputType = decimal; setSingleLine() }
+        val lon = EditText(this).apply { setText(p.lon.toString()); inputType = decimal; setSingleLine() }
+        val latRow = labelled("Weather latitude", lat)
+        val lonRow = labelled("Weather longitude", lon)
+        box.addView(latRow)
+        box.addView(lonRow)
 
         val brightLabel = text("", 15f)
         val bright = SeekBar(this).apply {
@@ -232,8 +247,13 @@ class SettingsActivity : Activity() {
 
         fun syncVisibility() {
             val t = types[type.selectedItemPosition]
-            urlRow.visibility = if (t == ModeType.WEB) View.VISIBLE else View.GONE
-            reloadRow.visibility = if (t == ModeType.WEB) View.VISIBLE else View.GONE
+            fun show(v: View, on: Boolean) { v.visibility = if (on) View.VISIBLE else View.GONE }
+            show(urlRow, t == ModeType.WEB || t == ModeType.PHOTOS)
+            url.hint = if (t == ModeType.PHOTOS) "Photo service, e.g. http://nas:8088" else "http://nas.local:8123/dashboard"
+            show(reloadRow, t == ModeType.WEB)
+            show(intervalRow, t.timed)
+            show(latRow, t == ModeType.FLIP_CLOCK)
+            show(lonRow, t == ModeType.FLIP_CLOCK)
             brightRow.visibility = if (t == ModeType.OFF) View.GONE else View.VISIBLE
         }
         type.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -252,6 +272,9 @@ class SettingsActivity : Activity() {
                 if (u.isNotEmpty() && !u.contains("://")) u = "http://$u"
                 p.url = u
                 p.reloadMinutes = reload.text.toString().toIntOrNull()?.coerceAtLeast(0) ?: 0
+                p.intervalSec = interval.text.toString().toIntOrNull()?.coerceAtLeast(5) ?: 30
+                lat.text.toString().toDoubleOrNull()?.takeIf { it in -90.0..90.0 }?.let { p.lat = it }
+                lon.text.toString().toDoubleOrNull()?.takeIf { it in -180.0..180.0 }?.let { p.lon = it }
                 p.brightness = bright.progress + 1
                 if (isNew) cfg.presets += p
                 save()

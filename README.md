@@ -1,9 +1,10 @@
 # Frame Launcher
 
 A small Android home-screen launcher for wall-mounted photo frames and tablets. It
-switches what the screen shows on a weekly schedule: a web page (a photo slideshow,
-a Home Assistant dashboard, anything with a URL), a full-screen clock, or the
-screen turned off.
+switches what the screen shows on a weekly schedule: a photo slideshow, a clock,
+wireframe animations, a web page (such as a Home Assistant dashboard), or the
+screen turned off. Slideshows, clocks and animations are drawn natively, which is
+much smoother than a web page on old hardware.
 
 It was built for a Frameo photo frame opened up for ADB access (Android 6, no
 root), but it should run on any Android 6+ device where you can set a custom home
@@ -12,10 +13,22 @@ app.
 ## What it does
 
 - **Modes.** You define named modes. Each one is:
+  - **NAS photos**: photos from an Immich album, served by the companion photo
+    service (`frameo-slideshow`). Set the service URL, e.g. `http://nas:8088`.
+  - **Picsum photos**: random photos from picsum.photos.
+  - **Split-flap clock**: time, date and current weather (Open-Meteo, no API key)
+    for a configurable latitude/longitude.
+  - **Wireframe animations**: glowing vector scenes in the style of early-1980s
+    TV interstitials.
   - **Web page**: a full-screen WebView showing a URL, with an optional reload
     every N minutes.
-  - **Clock**: a large full-screen clock.
+  - **Simple clock**: a large full-screen clock.
   - **Screen off**: the display is turned off.
+
+  Photo modes crossfade with a slow zoom, fill the sides with a blurred copy of the
+  photo, and show two portrait photos side by side. They keep the last 200 photos
+  on the device and cycle through those when the source is unreachable. Photo and
+  animation modes advance every N seconds (set per mode).
 
   Every mode except Screen off has its own brightness level.
 - **Schedule.** Rules of the form "on these days, at this time, switch to this
@@ -23,6 +36,8 @@ app.
   clock or timezone change, it works out which mode should be active right now.
 - **Show now.** You can manually pick a mode from settings. It stays until the
   next scheduled switch, or until you tap "Resume schedule".
+- **Swipes** in photo and animation modes: left/right for next/previous, up for a
+  fresh batch of photos, down to restart the mode.
 - **Hidden settings.** There's no visible UI. Hold your finger on the top-left
   corner for 2.5 seconds to open settings. You can protect this with a numeric
   PIN.
@@ -37,8 +52,8 @@ All configuration lives on the device itself. Nothing is sent anywhere, and the
 app has no server or account.
 
 On first start it creates an example schedule: a "Dashboard" mode at 07:00,
-"Photos" at 18:00, a dim "Night clock" at 22:30 and "Screen off" at 23:30. The
-two web modes have no URL yet, so set them in settings.
+"Photos" (NAS photos) at 18:00, a dim "Night clock" at 22:30 and "Screen off" at
+23:30. "Dashboard" and "Photos" have no URL yet, so set them in settings.
 
 ## Building
 
@@ -90,6 +105,15 @@ relies on the system screen timeout.
   adb shell am start -n app.framelauncher/.MainActivity
   ```
 
+- To try a mode without changing the schedule (shown for 10 minutes):
+
+  ```sh
+  adb shell am start -n app.framelauncher/.MainActivity --es preview WIRE
+  adb shell am start -n app.framelauncher/.MainActivity --es preview PHOTOS --es url http://nas:8088 --ei interval 8
+  adb shell am start -n app.framelauncher/.MainActivity --es preview none   # back to the schedule
+  ```
+
+  Mode type names: `PHOTOS`, `PICSUM`, `FLIP_CLOCK`, `WIRE`, `WEB`, `CLOCK`, `OFF`.
 - Cleartext HTTP is allowed on purpose, because local services often don't use
   HTTPS.
 
@@ -97,7 +121,11 @@ relies on the system screen timeout.
 
 ```
 app/src/main/java/app/framelauncher/
-  MainActivity.kt      the full-screen display: WebView, clock, screen off, hidden corner
+  MainActivity.kt      the full-screen display: hosts the modes, swipes, hidden corner
+  PhotoShow.kt         native photo slideshow, photo sources (NAS service, Picsum), disk cache
+  FlipClockView.kt     split-flap clock with weather
+  WireView.kt          wireframe animations
+  Net.kt               HTTP helper and the Show interface shared by native modes
   SettingsActivity.kt  on-device settings: modes, schedule, PIN, show-now
   Engine.kt            alarms, boot handling, screen wake/off, device admin
   Model.kt             modes, schedule rules, storage and schedule calculation
